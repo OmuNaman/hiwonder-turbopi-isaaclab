@@ -1,0 +1,276 @@
+<?xml version="1.0" encoding="utf-8"?>
+<robot name="turbopi" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- base_link -->
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0.0026189 -8.907E-05 -0.0059243" rpy="0 0 0" />
+      <mass value="0.16693" />
+      <inertia ixx="8.527E-05" ixy="-1.7865E-08" ixz="3.8947E-06" iyy="0.00014973" iyz="9.9047E-08" izz="0.00021247" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/base_link.STL" />
+      </geometry>
+      <material name="base_link">
+        <color rgba="0.16 0.18 0.21 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- base_footprint -->
+  <link name="base_footprint"/>
+  <joint name="base_footprint_to_base_link" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0.05" rpy="0 0 0"/>
+  </joint>
+
+  <!-- servo -->
+  <link name="link1">
+    <inertial>
+      <origin xyz="0.00046928 -1.0325E-05 0.012575" rpy="0 0 0" />
+      <mass value="0.0046713" />
+      <inertia ixx="1.0234E-07" ixy="8.1837E-11" ixz="-5.1631E-09" iyy="2.7132E-07" iyz="1.5424E-10" izz="2.8725E-07" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/link1.STL" />
+      </geometry>
+      <material name="link1">
+        <color rgba="0.12 0.39 0.78 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/link1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="joint1" type="fixed">
+    <origin xyz="0.036409 -1.5623E-05 0.010452" rpy="0 0 0" />
+    <parent link="base_link" />
+    <child link="link1" />
+    <axis xyz="0 0 0" />
+  </joint>
+
+  <link name="link2">
+    <inertial>
+      <origin xyz="1.6809E-10 -0.00034562 0.0084985" rpy="0 0 0" />
+      <mass value="0.0040591" />
+      <inertia ixx="1.6419E-06" ixy="6.7169E-14" ixz="9.1491E-15" iyy="6.1322E-07" iyz="-2.1443E-08" izz="1.4331E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/link2.STL" />
+      </geometry>
+      <material name="link2">
+        <color rgba="0.12 0.39 0.78 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/link2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="joint2" type="revolute">
+    <origin xyz="0.005349 1.0781E-05 0.0301" rpy="0 0 0" />
+    <parent link="link1" />
+    <child link="link2" />
+    <axis xyz="0 0 -1" />
+    <limit lower="-1.5708" upper="1.5708" effort="2.0" velocity="3.0" />
+  </joint>
+
+  <link name="link3">
+    <inertial>
+      <origin xyz="0.0092132 -0.0017689 0.0011854" rpy="0 0 0" />
+      <mass value="0.0083097" />
+      <inertia ixx="1.1387E-06" ixy="4.0387E-08" ixz="-9.3721E-08" iyy="1.0893E-06" iyz="9.0678E-09" izz="1.5389E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/link3.STL" />
+      </geometry>
+      <material name="link3">
+        <color rgba="0.12 0.39 0.78 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/link3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="joint3" type="revolute">
+    <origin xyz="0 0 0.023263" rpy="0 0 0" />
+    <parent link="link2" />
+    <child link="link3" />
+    <axis xyz="0 -1 0" />
+    <limit lower="-0.383" upper="1.884" effort="2.0" velocity="3.0" />
+  </joint>
+
+  <!-- camera -->
+  <link name="camera_link">
+    <inertial>
+      <origin xyz="0.0049726 1.4138E-07 1.6342E-05" rpy="0 0 0" />
+      <mass value="0.0034762" />
+      <inertia ixx="1.7039E-07" ixy="-4.9109E-13" ixz="1.0447E-10" iyy="8.7367E-08" iyz="1.923E-13" izz="1.154E-07" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/camera_link.STL" />
+      </geometry>
+      <material name="camera_link">
+        <color rgba="0.05 0.05 0.07 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/camera_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="camera_joint" type="fixed">
+    <origin xyz="0.032509 0.00059237 0.0052892" rpy="0 0 0" />
+    <parent link="link3" />
+    <child link="camera_link" />
+    <axis xyz="0 0 0" />
+  </joint>
+
+  <!-- wheel_lf -->
+  <link name="wheel_lf_link">
+    <inertial>
+      <origin xyz="5.324E-05 0.00072035 3.2904E-05" rpy="0 0 0" />
+      <mass value="0.037689" />
+      <inertia ixx="3.6748E-06" ixy="-1.4307E-09" ixz="-1.2017E-08" iyy="5.8098E-06" iyz="1.7256E-09" izz="3.6774E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/wheel_lf_link.STL" />
+      </geometry>
+      <material name="wheel_lf_link">
+        <color rgba="0.08 0.08 0.08 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/wheel_lf_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="wheel_lf_joint" type="continuous">
+    <origin xyz="0.057814 0.064852 -0.017526" rpy="0 0 0" />
+    <parent link="base_link" />
+    <child link="wheel_lf_link" />
+    <axis xyz="0 -1 0" />
+  </joint>
+
+  <!-- wheel_lb -->
+  <link name="wheel_lb_link">
+    <inertial>
+      <origin xyz="-5.3309E-05 0.00072022 3.295E-05" rpy="0 0 0" />
+      <mass value="0.037684" />
+      <inertia ixx="3.6742E-06" ixy="1.4767E-09" ixz="1.2007E-08" iyy="5.8089E-06" iyz="1.7249E-09" izz="3.6768E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/wheel_lb_link.STL" />
+      </geometry>
+      <material name="wheel_lb_link">
+        <color rgba="0.08 0.08 0.08 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/wheel_lb_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="wheel_lb_joint" type="continuous">
+    <origin xyz="-0.061513 0.064852 -0.017526" rpy="0 0 0" />
+    <parent link="base_link" />
+    <child link="wheel_lb_link" />
+    <axis xyz="0 1 0" />
+  </joint>
+
+  <!-- wheel_rb -->
+  <link name="wheel_rb_link">
+    <inertial>
+      <origin xyz="-5.3273E-05 -0.00042384 3.2896E-05" rpy="0 0 0" />
+      <mass value="0.037689" />
+      <inertia ixx="3.6748E-06" ixy="-1.4319E-09" ixz="1.2016E-08" iyy="5.8099E-06" iyz="-1.7242E-09" izz="3.6774E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/wheel_rb_link.STL" />
+      </geometry>
+      <material name="wheel_rb_link">
+        <color rgba="0.08 0.08 0.08 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/wheel_rb_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="wheel_rb_joint" type="continuous">
+    <origin xyz="-0.061513 -0.065148 -0.017526" rpy="0 0 0" />
+    <parent link="base_link" />
+    <child link="wheel_rb_link" />
+    <axis xyz="0 1 0" />
+  </joint>
+
+  <!-- wheel_rf -->
+  <link name="wheel_rf_link">
+    <inertial>
+      <origin xyz="5.331E-05 -0.0004237 3.2949E-05" rpy="0 0 0" />
+      <mass value="0.037684" />
+      <inertia ixx="3.6742E-06" ixy="1.4763E-09" ixz="-1.2007E-08" iyy="5.8089E-06" iyz="-1.7258E-09" izz="3.6768E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/wheel_rf_link.STL" />
+      </geometry>
+      <material name="wheel_rf_link">
+        <color rgba="0.08 0.08 0.08 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="file:///workspace/turbopi/turbopi_description/meshes/wheel_rf_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="wheel_rf_joint" type="continuous">
+    <origin xyz="0.057814 -0.065148 -0.017526" rpy="0 0 0" />
+    <parent link="base_link" />
+    <child link="wheel_rf_link" />
+    <axis xyz="0 -1 0" />
+  </joint>
+
+</robot>
