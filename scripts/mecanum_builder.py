@@ -29,28 +29,32 @@ class MecanumWheelConfig:
     wheel_pos_in_robot: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
-# Roller angle signs below match the standard ROS-convention mecanum IK in
-# common.py (+vy = body-left strafe, +wz = CCW yaw). The earlier layout used
-# the mirror-X pattern, which inverted strafe direction and left yaw relying
-# on roller slip for the correct sign.
+# Roller X-pattern: LF / BR = +45, FR / LB = -45. This is the one the
+# standard mecanum IK in common.py was derived for — for pure yaw the IK's
+# wheel velocity at each corner equals the kinematic no-slip requirement
+# through the roller. Flipping these signs (mirror-X) was tried briefly to
+# fix the +vy -> -vy strafe inversion, but it pushed the IK/kinematic
+# mismatch for yaw up to ~17x, which made the robot stall mid-turn. The
+# strafe inversion is now handled by negating vy inside
+# twist_to_wheel_targets instead.
 WHEEL_CONFIGS = {
     "wheel_lf_link": MecanumWheelConfig(
-        roller_angle_deg=-45.0,
+        roller_angle_deg=+45.0,
         prefix="lf",
         wheel_pos_in_robot=(0.057814, 0.064852, 0.032474),
     ),
     "wheel_rf_link": MecanumWheelConfig(
-        roller_angle_deg=+45.0,
+        roller_angle_deg=-45.0,
         prefix="rf",
         wheel_pos_in_robot=(0.057814, -0.065148, 0.032474),
     ),
     "wheel_lb_link": MecanumWheelConfig(
-        roller_angle_deg=+45.0,
+        roller_angle_deg=-45.0,
         prefix="lb",
         wheel_pos_in_robot=(-0.061513, 0.064852, 0.032474),
     ),
     "wheel_rb_link": MecanumWheelConfig(
-        roller_angle_deg=-45.0,
+        roller_angle_deg=+45.0,
         prefix="rb",
         wheel_pos_in_robot=(-0.061513, -0.065148, 0.032474),
     ),

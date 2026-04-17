@@ -345,13 +345,23 @@ def hold_arm_posture(robot: Articulation, arm_joint_ids: list[int]) -> None:
 
 
 def twist_to_wheel_targets(command: torch.Tensor | list[float] | tuple[float, float, float], device: str) -> torch.Tensor:
-    """Convert body twist commands ``(vx, vy, wz)`` into mecanum wheel velocity targets."""
+    """Convert body twist commands ``(vx, vy, wz)`` into mecanum wheel velocity targets.
+
+    Note on the vy sign: empirically the Isaac Sim mecanum plant produces
+    motion in the ``-vy`` direction for a ``+vy`` command when the rollers
+    are in the standard LF=+45/RF=-45/LB=-45/RB=+45 X-pattern. Flipping the
+    roller angles removes this inversion but breaks the IK's match to the
+    yaw kinematic constraint, so the robot stalls mid-turn. The cheapest
+    fix that keeps both yaw and strafe correct is to negate vy right here
+    at the IK: +vy command still means "strafe body-left" from the caller's
+    perspective, but the wheel targets are computed with the opposite sign.
+    """
     command_t = torch.as_tensor(command, dtype=torch.float32, device=device)
     if command_t.ndim == 1:
         command_t = command_t.unsqueeze(0)
 
     vx = command_t[:, 0]
-    vy = command_t[:, 1]
+    vy = -command_t[:, 1]
     wz = command_t[:, 2]
 
     omega_lf = (vx - vy - LW_SUM_HALF * wz) / WHEEL_RADIUS
