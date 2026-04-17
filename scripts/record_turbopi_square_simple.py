@@ -1139,11 +1139,6 @@ def run_full_square_episode(*, sim, robot, camera, wheel_joint_ids, arm_joint_id
 
 
 def main() -> None:
-    physics_dt = float(args_cli.physics_dt)
-    substeps = steps_per_control(physics_dt, args_cli.control_hz)
-    livestream_enabled = bool(getattr(args_cli, "livestream", 0))
-    render_interval = substeps if args_cli.headless and not livestream_enabled else 1
-
     scene_cfg = SquareTrackSceneCfg(
         square_half_extent=args_cli.square_half_extent,
         floor_half_extent=args_cli.floor_half_extent,
@@ -1152,6 +1147,13 @@ def main() -> None:
         wall_thickness=args_cli.wall_thickness,
     )
     route = resolve_route_path(scene_cfg.square_half_extent)
+    control_dt = 1.0 / max(args_cli.control_hz, 1e-6)
+    physics_dt = float(args_cli.physics_dt)
+    if route.mode == "full_square":
+        physics_dt = min(control_dt, max(physics_dt, 1.0 / 30.0))
+    substeps = steps_per_control(physics_dt, args_cli.control_hz)
+    livestream_enabled = bool(getattr(args_cli, "livestream", 0))
+    render_interval = substeps if args_cli.headless and not livestream_enabled else 1
 
     sim_cfg = sim_utils.SimulationCfg(dt=physics_dt, render_interval=render_interval, device=args_cli.device)
     sim = sim_utils.SimulationContext(sim_cfg)
@@ -1210,6 +1212,8 @@ def main() -> None:
     print(f"  Goal           : ({route.goal_xy[0]:+.2f}, {route.goal_xy[1]:+.2f})")
     print(f"  Episodes       : {args_cli.num_episodes}")
     print(f"  Control rate   : {args_cli.control_hz:.1f} Hz")
+    print(f"  Sim dt         : {physics_dt:.4f} s")
+    print(f"  Control steps  : {substeps}")
     print(f"  Target speed   : {args_cli.target_speed:.2f} m/s")
     print(f"  Heading gain   : {args_cli.drive_heading_gain:.2f}")
     print(f"  Wz cap         : {args_cli.max_wz:.2f} rad/s")

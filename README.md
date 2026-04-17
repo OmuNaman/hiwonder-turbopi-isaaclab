@@ -9,7 +9,9 @@ Using this repo, you can:
 - inspect the robot in a square-loop collection arena
 - switch to the robot-mounted camera
 - teleoperate the robot from Isaac Lab
-- record autonomous square-loop episodes in the legacy no-text CNN dataset format
+- record simple autonomous square-loop episodes in the legacy no-text CNN dataset format
+- train the no-text CNN directly inside this repo
+- run the trained CNN with inference control that matches the recorder
 - run the same setup on a local machine or on Isaac Lab running on Brev
 
 The repo includes a ready-to-load USD, the original URDF and meshes, a standalone viewer, and a keyboard teleop script so you can bring the robot up quickly without digging through the RL or dataset code.
@@ -28,6 +30,12 @@ In other words:
 
 - Isaac Lab is checked out at `/workspace/isaaclab`
 - this TurboPi repo is checked out at `/workspace/turbopi_standalone`
+
+If you want to record datasets and train the CNN in a fresh clone, install the two Python extras in the Isaac Lab environment once:
+
+```bash
+/workspace/isaaclab/_isaac_sim/python.sh -m pip install pyarrow av
+```
 
 ## Quick Start
 
@@ -73,8 +81,10 @@ turbopi_standalone/
 └── scripts/
     ├── common.py
     ├── cnn_dataset.py
+    ├── drive_turbopi_square_cnn.py
     ├── mecanum_builder.py
-    ├── record_turbopi_square_cnn.py
+    ├── record_turbopi_square_simple.py
+    ├── record_turbopi_straight_cnn.py
     ├── square_loop.py
     ├── teleop_turbopi.py
     ├── view_turbopi.py
@@ -127,16 +137,16 @@ View the square-loop collection arena:
 ./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/view_turbopi_square.py --livestream 2
 ```
 
-Record autonomous no-text CNN episodes:
+Record simple autonomous square-loop CNN episodes:
 
 ```bash
-./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/record_turbopi_square_cnn.py --headless --num_episodes 8
+./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/record_turbopi_square_simple.py --headless --route square_ccw --num_episodes 8
 ```
 
-Omega feedback is enabled by default in the recorder. Use this only if you want to compare against the uncompensated path:
+Run a trained no-text CNN checkpoint in the same square arena:
 
 ```bash
-./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/record_turbopi_square_cnn.py --headless --num_episodes 8 --disable_omega_feedback
+./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/drive_turbopi_square_cnn.py --livestream 2 --view chase --direction counterclockwise --control_mode kinematic --checkpoint /workspace/turbopi_standalone/runs/cnn_square_simple/<run_name>/checkpoints/best.pt
 ```
 
 Record a teleoperated square trace you can replay exactly later:
@@ -232,7 +242,14 @@ The standalone scripts intentionally keep the scope small:
 - they hold the small arm mast in its default pose so the mounted camera stays usable
 - they convert `(vx, vy, wz)` body commands into wheel velocities with the same mecanum mapping used in the RL environment
 
-This is not the RL environment, not the dataset collector, and not the square-loop trainer. It is the lightweight entry point for loading, viewing, and driving the Hiwonder TurboPi in Isaac Lab.
+The repo stays intentionally small, but it now covers the whole practical standalone workflow:
+
+- plain viewer and keyboard teleop
+- simple square-loop and straight-line dataset recording
+- local CNN training
+- CNN inference inside the same square arena
+
+The current recommended square-loop path is `record_turbopi_square_simple.py` for data collection plus `drive_turbopi_square_cnn.py --control_mode kinematic` for deployment.
 
 ## Physics Fixes
 
@@ -244,9 +261,7 @@ An earlier revision had two problems that only showed up once you stopped drivin
    - Wheel actuator damping raised from `5.0` to `20.0` in `build_turbopi_cfg`, so the implicit velocity actuator tracks its commanded wheel speeds within the effort limit instead of taking the whole episode to converge.
    - Roller friction is `static=1.0, dynamic=0.85` and combines via `multiply`, matching the floor material so wheel-ground interaction is predictable.
 
-These are enough to get clean open-loop strafe and yaw. The `OmegaTracker` closed-loop compensator is still available on the teleop/record paths to soak up the residual drift at corners.
-
-The recorder's older "+lap must be clockwise" quality gate still ships with the square-loop scripts. If you want a simpler single-traversal task, use the straight-line flow described below instead.
+These are enough to get clean open-loop strafe and yaw. The `OmegaTracker` closed-loop compensator is still available on the teleop path and on the legacy dynamic recorder when you want it, but the current simple square recorder and default CNN inference path both use the more predictable kinematic square flow described below.
 
 ## Straight-Line Dataset Flow
 
@@ -313,22 +328,39 @@ The field `lap_progress` in the saved parquet is the normalized progress in `[0,
 
 ## Square-Loop Dataset Flow
 
-The standalone repo now also includes a lightweight square-loop scene and an autonomous recorder aimed at the legacy no-text CNN path-following stack.
+The current recommended square-loop pipeline is:
 
-The square-loop setup uses:
+- [`scripts/view_turbopi_square.py`](scripts/view_turbopi_square.py) to inspect the arena
+- [`scripts/record_turbopi_square_simple.py`](scripts/record_turbopi_square_simple.py) to generate episodes
+- [`scripts/drive_turbopi_square_cnn.py`](scripts/drive_turbopi_square_cnn.py) to run the trained model
+
+The environment is intentionally plain:
 
 - a dark floor
 - a white taped square route
 - outer arena walls
-- a deterministic teacher that follows the known square geometry while keeping the robot nose aligned with the path tangent
+- the TurboPi starting from a consistent pose on the left side of the square
 
-This choice is intentional: a visually marked floor loop is easier to keep stable than building an inner-walled corridor, while still producing clean episodes for imitation learning.
+The simple recorder supports three routes:
+
+- `--route segment`: record one named start-to-goal edge
+- `--route square_ccw`: record one full counterclockwise square lap per episode
+- `--route square_cw`: record one full clockwise square lap per episode
+
+For the full-square routes, the teacher behaves like a forward-facing rover rather than a sliding mecanum demo:
+
+- it keeps `vy` near zero
+- it drives mainly with forward speed plus yaw
+- it blends heading early into the next corner
+- it records one full lap as one episode
+- it writes directly to the same `video.mp4` + `data.parquet` + `episode_info.json` layout used by the legacy CNN loader
 
 Default square geometry:
 
-- taped route centerline corners: `(-0.45, -0.45) -> (-0.45, 0.45) -> (0.45, 0.45) -> (0.45, -0.45)` meters
-- robot start pose for clockwise runs: `(-0.45, 0.0, 0.04)` with yaw `+pi/2`
-- robot start pose for counterclockwise runs: `(-0.45, 0.0, 0.04)` with yaw `-pi/2`
+- taped route centerline corners: `(-0.45, -0.45) -> (0.45, -0.45) -> (0.45, 0.45) -> (-0.45, 0.45)` meters
+- the full-square start pose is the left midpoint `(-0.45, 0.0, 0.04)`
+- `square_ccw` starts at yaw `-pi/2`
+- `square_cw` starts at yaw `+pi/2`
 - floor half-extent: `1.40` meters
 - wall center planes: `x/y = +/-1.42` meters
 
@@ -343,29 +375,29 @@ cd /workspace
 
 ```bash
 cd /workspace
-./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/record_turbopi_square_cnn.py --headless --num_episodes 8
+./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/record_turbopi_square_simple.py --headless --route square_ccw --num_episodes 8
 ```
 
-For high-throughput collection, use headless mode. The recorder now automatically renders only at the control rate during headless runs, which cuts a lot of wasted wall-clock time while still saving one frame per control tick. Actual wall-clock throughput still depends heavily on the Brev/GPU box, and minute-scale bulk recording targets will likely require a future multi-environment recorder rather than the current single-robot setup.
+For high-throughput collection, use headless mode. The simple recorder automatically relaxes the full-square physics step to a more efficient setting in headless runs while keeping the saved control cadence unchanged. That makes the published command much faster than the older square recorder without changing the dataset format.
 
 Example: 50 fast counterclockwise episodes for bulk dataset generation:
 
 ```bash
 cd /workspace
-./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/record_turbopi_square_cnn.py --headless --directions counterclockwise --num_episodes 50 --target_speed 0.24 --control_hz 8
+./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/record_turbopi_square_simple.py --headless --route square_ccw --num_episodes 50 --target_speed 0.30 --lookahead_distance 0.16 --corner_slowdown_distance 0.30 --square_max_wz 1.25 --max_episode_time 25
 ```
 
-Alternate clockwise and counterclockwise while watching in livestream mode:
+Watch the same recorder in livestream mode:
 
 ```bash
 cd /workspace
-./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/record_turbopi_square_cnn.py --livestream 2 --view chase --directions clockwise,counterclockwise --num_episodes 6
+./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/record_turbopi_square_simple.py --livestream 2 --view chase --route square_ccw --num_episodes 10
 ```
 
 Episodes are written by default to:
 
 ```text
-/workspace/turbopi_standalone/data/cnn_square_loop/<session_name>/
+/workspace/turbopi_standalone/data/cnn_square_loop/session_simple_<timestamp>/
 ```
 
 Each saved episode has:
@@ -385,7 +417,7 @@ There is also session-level metadata:
 
 ### How Lap Completion Is Decided
 
-The autonomous recorder does not accept an episode based on time alone.
+For `square_ccw` and `square_cw`, the recorder does not accept an episode based on time alone.
 
 On every control tick, it projects the robot root `x,y` position onto the nearest edge of the square and converts that to a normalized `track_phase` in `[0, 1)`:
 
@@ -396,45 +428,41 @@ On every control tick, it projects the robot root `x,y` position onto the neares
 
 It then accumulates only forward signed phase progress into `lap_progress`:
 
-- clockwise: positive phase advance counts
-- counterclockwise: negative phase advance is flipped and counts
+- `square_cw`: positive phase advance counts
+- `square_ccw`: negative phase advance is flipped and counts
 - wrap-around at `1.0 -> 0.0` is handled explicitly
 
-By default, a rollout is accepted when `lap_progress >= 0.97`, which is effectively one clean full loop with a little tolerance near the finish line.
+By default, a rollout is accepted when:
+
+- `lap_progress >= 0.97`
+- the robot returns near the start phase
+- the robot returns near the start heading
+- commanded forward distance covers at least `min_square_distance_ratio` of the square perimeter
 
 By default, a rollout is rejected if:
 
-- `track_error > 0.30` meters
-- it makes no forward lap progress for `5.0` seconds after an initial `3.0` second grace period
-- the physics state becomes invalid
+- `track_error > 0.25` meters
+- it makes no useful forward progress for `8.0` seconds
+- the simulation app closes or the state goes invalid
+- the camera stays too flat during warmup
 - it times out at `45.0` seconds
-- it technically reaches the end but its mean body speed is below `0.03 m/s`
 
-The recorder follows the `--directions` list in order. By default it records only `clockwise`, which keeps livestream inspection simpler. If you pass `--directions clockwise,counterclockwise`, saved episode `0` is clockwise, saved episode `1` is counterclockwise, and so on. Direction changes both the start yaw and the segment order used by the lap tracker:
+Unlike the older dynamic square recorder, the simple recorder does not apply a second wave of post-lap quality gates before saving. Instead, it saves every rollout that actually satisfies the route-completion and safety checks above, while still writing summary metrics such as mean/p90/max track error and `mean_action_vy_vx_ratio` into the episode metadata for later inspection.
 
-- clockwise starts at `(-0.45, 0.0)` facing `+pi/2` and tracks the square in the order `left -> top -> right -> bottom`
-- counterclockwise starts at `(-0.45, 0.0)` facing `-pi/2` and tracks the square in the order `left -> bottom -> right -> top`
+### Segment Mode
 
-The autonomous recorder now enables omega feedback by default, so the actual motion better matches the commanded yaw rate at corners. Use `--disable_omega_feedback` only for debugging or A/B comparison.
+If you want a simpler teacher than the full square, use `--route segment` together with named points like `bl`, `br`, `tr`, `tl`, `lm`, `rm`, `tm`, `bm`, or `center`. For example:
 
-Lap acceptance now also requires the robot to return near the start heading, not just the start phase on the square. That keeps the end of the rollout cleaner and avoids accepting a lap while the robot is still visibly rotated away from the path tangent.
+```bash
+cd /workspace
+./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/record_turbopi_square_simple.py --headless --route segment --start bl --goal br --num_episodes 8
+```
 
-### Recorder Quality Gates
+That records one point-to-point traversal per episode in the same dataset format.
 
-The autonomous recorder now rejects laps that complete the loop but are not clean enough to keep:
+### Legacy Dynamic Recorder
 
-- mean track error must stay below `0.06 m`
-- p90 track error must stay below `0.12 m`
-- peak track error must stay below `0.18 m`
-- no saved episode may have any frames above `0.15 m` track error
-- mean `|vy| / |vx|` must stay below `0.20` so the teacher does not save crab-walking laps
-- the RGB stream must not be effectively blank or washed out
-
-In addition to the lap-progress threshold, the recorder also requires the robot to complete the square edge sequence in order and return to the start-phase neighborhood before saving an episode.
-
-### Camera Warmup
-
-The recorder now warms up the robot camera after reset and refuses to start an episode if the RGB stream is still effectively flat. This fixes the earlier failure mode where an episode could look successful numerically but still save nearly white video frames.
+The older [`scripts/record_turbopi_square_cnn.py`](scripts/record_turbopi_square_cnn.py) is still in the repo for comparison, but the simple recorder above is the recommended square-loop path for new clones because it is easier to tune, faster to inspect, and now matches the default CNN inference path.
 
 See [Square Loop Recorder](./docs/square_loop_cnn_recorder.md) for the full workflow and [No-Text CNN Pipeline](./docs/no_text_cnn_pipeline.md) for the architecture and data-path explanation based on your legacy reference files.
 
@@ -446,14 +474,14 @@ Train on all recorded sessions under the default dataset root:
 
 ```bash
 cd /workspace/turbopi_standalone
-PYTHONPATH=/workspace/turbopi_standalone /workspace/isaaclab/_isaac_sim/python.sh -m cnn_policy.train --episodes-dir /workspace/turbopi_standalone/data/cnn_square_loop --run-dir /workspace/turbopi_standalone/runs/cnn_v1 --device cuda
+PYTHONPATH=/workspace/turbopi_standalone /workspace/isaaclab/_isaac_sim/python.sh -m cnn_policy.train --episodes-dir /workspace/turbopi_standalone/data/cnn_square_loop --run-dir /workspace/turbopi_standalone/runs/cnn_square_simple --device cuda
 ```
 
 Train on a single session:
 
 ```bash
 cd /workspace/turbopi_standalone
-PYTHONPATH=/workspace/turbopi_standalone /workspace/isaaclab/_isaac_sim/python.sh -m cnn_policy.train --episodes-dir /workspace/turbopi_standalone/data/cnn_square_loop/session_20260416_132347 --run-dir /workspace/turbopi_standalone/runs/cnn_single_session --device cuda
+PYTHONPATH=/workspace/turbopi_standalone /workspace/isaaclab/_isaac_sim/python.sh -m cnn_policy.train --episodes-dir /workspace/turbopi_standalone/data/cnn_square_loop/session_simple_<timestamp> --run-dir /workspace/turbopi_standalone/runs/cnn_square_simple --device cuda
 ```
 
 If you only have one session, the training code warns and skips validation because the split happens at the session level, not the episode level.
@@ -466,19 +494,20 @@ Livestream with chase camera:
 
 ```bash
 cd /workspace
-./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/drive_turbopi_square_cnn.py --livestream 2 --view chase --checkpoint /workspace/turbopi_standalone/runs/cnn_v1/<run_name>/checkpoints/best.pt
+./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/drive_turbopi_square_cnn.py --livestream 2 --view chase --direction counterclockwise --control_mode kinematic --checkpoint /workspace/turbopi_standalone/runs/cnn_square_simple/<run_name>/checkpoints/best.pt
 ```
 
 Livestream from the robot-mounted camera:
 
 ```bash
 cd /workspace
-./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/drive_turbopi_square_cnn.py --livestream 2 --view robot --checkpoint /workspace/turbopi_standalone/runs/cnn_v1/<run_name>/checkpoints/best.pt
+./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/drive_turbopi_square_cnn.py --livestream 2 --view robot --direction counterclockwise --control_mode kinematic --checkpoint /workspace/turbopi_standalone/runs/cnn_square_simple/<run_name>/checkpoints/best.pt
 ```
 
 Useful options:
 
-- `--direction counterclockwise`
+- `--direction counterclockwise` to match the square-CCW training set
+- `--control_mode dynamic` if you explicitly want wheel-physics deployment instead of the default kinematic mode
 - `--duration 30`
 - `--policy_device cpu`
 - `--disable_auto_reset`

@@ -41,6 +41,13 @@ parser.add_argument(
     default=0,
     help="Physics steps per render. 0 uses control-rate rendering for headless runs, every step otherwise.",
 )
+parser.add_argument(
+    "--control_mode",
+    type=str,
+    choices=("kinematic", "dynamic"),
+    default="kinematic",
+    help="How to apply CNN commands. `kinematic` matches the simple square recorder and is the default.",
+)
 parser.add_argument("--camera_warmup_steps", type=int, default=18, help="Zero-command steps used to warm up the robot camera after reset.")
 parser.add_argument("--min_image_std", type=float, default=8.0, help="Warn and wait if the camera image stream is too flat or washed out.")
 parser.add_argument("--settle_steps", type=int, default=24, help="Zero-command steps after reset before policy control begins.")
@@ -80,6 +87,7 @@ import numpy as np
 import torch
 
 import isaaclab.sim as sim_utils
+from isaaclab.utils.math import euler_xyz_from_quat, quat_from_euler_xyz
 
 from cnn_policy.drive import LoopPolicyRuntime, PolicyRuntimeConfig
 from common import (
@@ -109,6 +117,7 @@ from square_loop import (
 class ResetResult:
     frame_rgb: np.ndarray
     image_std: float
+    pose: tuple[float, float, float]
 
 
 class StopFlag:
@@ -145,6 +154,10 @@ def image_std_rgb(image_rgb: np.ndarray) -> float:
     return float(np.asarray(image_rgb, dtype=np.float32).std())
 
 
+def wrap_to_pi(angle: float) -> float:
+    return (angle + np.pi) % (2.0 * np.pi) - np.pi
+
+
 def steps_per_control(physics_dt: float, control_hz: float) -> int:
     control_dt = 1.0 / max(control_hz, 1e-6)
     return max(1, int(round(control_dt / physics_dt)))
@@ -154,7 +167,58 @@ def zero_command(device: str | torch.device) -> torch.Tensor:
     return torch.zeros(3, dtype=torch.float32, device=device)
 
 
-def apply_body_command(
+def get_pose(robot) -> tuple[float, float, float]:
+    x = float(robot.data.root_pos_w[0, 0].item())
+    y = float(robot.data.root_pos_w[0, 1].item())
+    _, _, yaw_t = euler_xyz_from_quat(robot.data.root_quat_w)
+    yaw = wrap_to_pi(float(yaw_t[0].item()))
+    return x, y, yaw
+
+
+def write_kinematic_state(
+    robot,
+    wheel_joint_ids: list[int],
+    arm_joint_ids: list[int],
+    pose: tuple[float, float, float],
+    command_vec: tuple[float, float, float],
+) -> None:
+    x, y, yaw = pose
+    vx, vy, wz = command_vec
+    root_pose = robot.data.default_root_state[:, :7].clone()
+    root_pose[:, 0] = float(x)
+    root_pose[:, 1] = float(y)
+    root_pose[:, 2] = float(robot.data.default_root_state[0, 2].item())
+
+    yaw_t = torch.full((robot.num_instances,), float(yaw), dtype=torch.float32, device=robot.device)
+    zeros = torch.zeros_like(yaw_t)
+    root_pose[:, 3:7] = quat_from_euler_xyz(zeros, zeros, yaw_t)
+
+    root_velocity = torch.zeros((robot.num_instances, 6), dtype=torch.float32, device=robot.device)
+    robot.write_root_pose_to_sim(root_pose)
+    robot.write_root_velocity_to_sim(root_velocity)
+
+    command_t = torch.tensor([[vx, vy, wz]], dtype=torch.float32, device=robot.device)
+    wheel_targets = twist_to_wheel_targets(command_t, robot.device)
+    robot.set_joint_velocity_target(wheel_targets, joint_ids=wheel_joint_ids)
+    hold_arm_posture(robot, arm_joint_ids)
+    robot.write_data_to_sim()
+
+
+def integrate_body_pose(
+    pose: tuple[float, float, float],
+    command_vec: tuple[float, float, float],
+    dt: float,
+) -> tuple[float, float, float]:
+    x, y, yaw = pose
+    vx, vy, wz = command_vec
+    yaw_mid = yaw + 0.5 * wz * dt
+    x += (vx * np.cos(yaw_mid) - vy * np.sin(yaw_mid)) * dt
+    y += (vx * np.sin(yaw_mid) + vy * np.cos(yaw_mid)) * dt
+    yaw = wrap_to_pi(yaw + wz * dt)
+    return x, y, yaw
+
+
+def apply_dynamic_body_command(
     robot,
     wheel_joint_ids: list[int],
     arm_joint_ids: list[int],
@@ -179,7 +243,7 @@ def apply_body_command(
     return applied_command[0]
 
 
-def step_simulation(
+def step_dynamic_simulation(
     *,
     sim: sim_utils.SimulationContext,
     robot,
@@ -198,7 +262,7 @@ def step_simulation(
         if not simulation_app.is_running():
             return False
         ensure_sim_playing(sim)
-        apply_body_command(
+        apply_dynamic_body_command(
             robot,
             wheel_joint_ids,
             arm_joint_ids,
@@ -215,6 +279,85 @@ def step_simulation(
     return True
 
 
+def step_kinematic_simulation(
+    *,
+    sim: sim_utils.SimulationContext,
+    robot,
+    camera,
+    wheel_joint_ids: list[int],
+    arm_joint_ids: list[int],
+    pose: tuple[float, float, float],
+    command: torch.Tensor,
+    substeps: int,
+    physics_dt: float,
+    viewport,
+    active_view: str,
+) -> tuple[bool, tuple[float, float, float]]:
+    command_vec = tuple(float(item) for item in command.detach().cpu().tolist())
+    current_pose = pose
+    for _ in range(substeps):
+        if not simulation_app.is_running():
+            return False, current_pose
+        ensure_sim_playing(sim)
+        current_pose = integrate_body_pose(current_pose, command_vec, physics_dt)
+        write_kinematic_state(robot, wheel_joint_ids, arm_joint_ids, current_pose, command_vec)
+        sim.step()
+        robot.update(physics_dt)
+        if active_view == "chase":
+            update_chase_camera(robot, viewport)
+    camera.update(dt=substeps * physics_dt)
+    return True, current_pose
+
+
+def step_control(
+    *,
+    sim: sim_utils.SimulationContext,
+    robot,
+    camera,
+    wheel_joint_ids: list[int],
+    arm_joint_ids: list[int],
+    pose: tuple[float, float, float],
+    command: torch.Tensor,
+    substeps: int,
+    physics_dt: float,
+    viewport,
+    active_view: str,
+    control_mode: str,
+    omega_tracker: OmegaTracker | None,
+    max_omega_command: float,
+) -> tuple[bool, tuple[float, float, float]]:
+    if control_mode == "kinematic":
+        return step_kinematic_simulation(
+            sim=sim,
+            robot=robot,
+            camera=camera,
+            wheel_joint_ids=wheel_joint_ids,
+            arm_joint_ids=arm_joint_ids,
+            pose=pose,
+            command=command,
+            substeps=substeps,
+            physics_dt=physics_dt,
+            viewport=viewport,
+            active_view=active_view,
+        )
+
+    ok = step_dynamic_simulation(
+        sim=sim,
+        robot=robot,
+        camera=camera,
+        wheel_joint_ids=wheel_joint_ids,
+        arm_joint_ids=arm_joint_ids,
+        command=command,
+        substeps=substeps,
+        physics_dt=physics_dt,
+        viewport=viewport,
+        active_view=active_view,
+        omega_tracker=omega_tracker,
+        max_omega_command=max_omega_command,
+    )
+    return ok, get_pose(robot)
+
+
 def warm_up_camera(
     *,
     sim: sim_utils.SimulationContext,
@@ -224,6 +367,8 @@ def warm_up_camera(
     arm_joint_ids: list[int],
     viewport,
     active_view: str,
+    pose: tuple[float, float, float],
+    control_mode: str,
     omega_tracker: OmegaTracker | None,
     max_omega_command: float,
     warmup_steps: int,
@@ -231,29 +376,33 @@ def warm_up_camera(
 ) -> ResetResult:
     last_frame = None
     last_std = 0.0
+    current_pose = pose
     for _ in range(max(1, warmup_steps)):
-        if not step_simulation(
+        ok, current_pose = step_control(
             sim=sim,
             robot=robot,
             camera=camera,
             wheel_joint_ids=wheel_joint_ids,
             arm_joint_ids=arm_joint_ids,
+            pose=current_pose,
             command=zero_command(robot.device),
             substeps=1,
             physics_dt=args_cli.physics_dt,
             viewport=viewport,
             active_view=active_view,
+            control_mode=control_mode,
             omega_tracker=omega_tracker,
             max_omega_command=max_omega_command,
-        ):
+        )
+        if not ok:
             raise RuntimeError("Simulation app closed during camera warmup.")
         last_frame = rgb_frame_from_camera(camera)
         last_std = image_std_rgb(last_frame)
         if last_std >= min_image_std:
-            return ResetResult(frame_rgb=last_frame, image_std=last_std)
+            return ResetResult(frame_rgb=last_frame, image_std=last_std, pose=current_pose)
     if last_frame is None:
         raise RuntimeError("Camera warmup produced no frames.")
-    return ResetResult(frame_rgb=last_frame, image_std=last_std)
+    return ResetResult(frame_rgb=last_frame, image_std=last_std, pose=current_pose)
 
 
 def reset_runtime(
@@ -268,28 +417,33 @@ def reset_runtime(
     scene_cfg: SquareTrackSceneCfg,
     direction: str,
     policy: LoopPolicyRuntime,
+    control_mode: str,
     omega_tracker: OmegaTracker | None,
     max_omega_command: float,
 ) -> ResetResult:
     start_position, start_yaw = start_pose_for_direction(scene_cfg, direction)
     reset_robot_pose(robot, position=start_position, yaw=start_yaw)
+    pose = (start_position[0], start_position[1], start_yaw)
     policy.reset()
     if omega_tracker is not None:
         omega_tracker.reset()
-    if not step_simulation(
+    ok, pose = step_control(
         sim=sim,
         robot=robot,
         camera=camera,
         wheel_joint_ids=wheel_joint_ids,
         arm_joint_ids=arm_joint_ids,
+        pose=pose,
         command=zero_command(robot.device),
         substeps=max(1, args_cli.settle_steps),
         physics_dt=args_cli.physics_dt,
         viewport=viewport,
         active_view=active_view,
+        control_mode=control_mode,
         omega_tracker=omega_tracker,
         max_omega_command=max_omega_command,
-    ):
+    )
+    if not ok:
         raise RuntimeError("Simulation app closed during reset settle.")
     result = warm_up_camera(
         sim=sim,
@@ -299,6 +453,8 @@ def reset_runtime(
         arm_joint_ids=arm_joint_ids,
         viewport=viewport,
         active_view=active_view,
+        pose=pose,
+        control_mode=control_mode,
         omega_tracker=omega_tracker,
         max_omega_command=max_omega_command,
         warmup_steps=args_cli.camera_warmup_steps,
@@ -358,7 +514,7 @@ def main() -> None:
     active_view = activate_view_mode(args_cli.view, sim, robot, viewport)
 
     omega_tracker = None
-    if args_cli.enable_omega_feedback:
+    if args_cli.enable_omega_feedback and args_cli.control_mode == "dynamic":
         omega_tracker = OmegaTracker(
             robot.num_instances,
             robot.device,
@@ -380,6 +536,7 @@ def main() -> None:
         scene_cfg=scene_cfg,
         direction=args_cli.direction,
         policy=policy,
+        control_mode=args_cli.control_mode,
         omega_tracker=omega_tracker,
         max_omega_command=args_cli.omega_cap,
     )
@@ -399,6 +556,7 @@ def main() -> None:
     print(f"  Model input      : {policy.frame_history} frames @ {policy.image_width}x{policy.image_height}")
     print(f"  Start direction  : {args_cli.direction}")
     print(f"  Start view       : {active_view}")
+    print(f"  Control mode     : {args_cli.control_mode}")
     print(f"  Render interval  : {render_interval} physics steps")
     print(
         f"  Caps             : vx={args_cli.vx_cap:.2f} vy={args_cli.vy_cap:.2f} "
@@ -412,12 +570,15 @@ def main() -> None:
             f"  Omega ctrl       : enabled (gain={args_cli.omega_feedback_gain:.2f}, "
             f"alpha={args_cli.omega_measure_alpha:.2f})"
         )
+    elif args_cli.control_mode == "kinematic" and args_cli.enable_omega_feedback:
+        print("  Omega ctrl       : off (kinematic mode matches training)")
     else:
         print("  Omega ctrl       : off")
     print()
 
     control_dt = 1.0 / max(args_cli.control_hz, 1e-6)
     elapsed = 0.0
+    pose = reset_result.pose
     last_print_at = -1.0
     last_low_image_warn_at = -1.0
     reset_count = 0
@@ -442,9 +603,11 @@ def main() -> None:
                     scene_cfg=scene_cfg,
                     direction=args_cli.direction,
                     policy=policy,
+                    control_mode=args_cli.control_mode,
                     omega_tracker=omega_tracker,
                     max_omega_command=args_cli.omega_cap,
                 )
+                pose = reset_result.pose
                 reset_count += 1
                 elapsed = 0.0
                 last_print_at = -1.0
@@ -463,20 +626,23 @@ def main() -> None:
 
             pred, smoothed, command_np = policy.predict(frame_rgb)
             command_t = torch.as_tensor(command_np, dtype=torch.float32, device=robot.device)
-            if not step_simulation(
+            ok, pose = step_control(
                 sim=sim,
                 robot=robot,
                 camera=camera,
                 wheel_joint_ids=wheel_joint_ids,
                 arm_joint_ids=arm_joint_ids,
+                pose=pose,
                 command=command_t,
                 substeps=control_substeps,
                 physics_dt=args_cli.physics_dt,
                 viewport=viewport,
                 active_view=active_view,
+                control_mode=args_cli.control_mode,
                 omega_tracker=omega_tracker,
                 max_omega_command=args_cli.omega_cap,
-            ):
+            )
+            if not ok:
                 break
 
             if elapsed - last_print_at >= 1.0:
@@ -493,17 +659,19 @@ def main() -> None:
                 break
     finally:
         try:
-            step_simulation(
+            _, pose = step_control(
                 sim=sim,
                 robot=robot,
                 camera=camera,
                 wheel_joint_ids=wheel_joint_ids,
                 arm_joint_ids=arm_joint_ids,
+                pose=pose,
                 command=zero_command(robot.device),
                 substeps=max(1, args_cli.settle_steps),
                 physics_dt=args_cli.physics_dt,
                 viewport=viewport,
                 active_view=active_view,
+                control_mode=args_cli.control_mode,
                 omega_tracker=omega_tracker,
                 max_omega_command=args_cli.omega_cap,
             )

@@ -159,7 +159,7 @@ In this standalone repo, the intended training command is:
 
 ```bash
 cd /workspace/turbopi_standalone
-PYTHONPATH=/workspace/turbopi_standalone /workspace/isaaclab/_isaac_sim/python.sh -m cnn_policy.train --episodes-dir /workspace/turbopi_standalone/data/cnn_square_loop --run-dir /workspace/turbopi_standalone/runs/cnn_v1 --device cuda
+PYTHONPATH=/workspace/turbopi_standalone /workspace/isaaclab/_isaac_sim/python.sh -m cnn_policy.train --episodes-dir /workspace/turbopi_standalone/data/cnn_square_loop --run-dir /workspace/turbopi_standalone/runs/cnn_square_simple --device cuda
 ```
 
 The old `loop_cnn.train` module from the legacy repo is not needed here; the standalone repo now ships its own `cnn_policy.train`.
@@ -226,6 +226,8 @@ In this standalone repo, the runtime path is:
 - launch the Isaac Lab driver script at [`scripts/drive_turbopi_square_cnn.py`](../scripts/drive_turbopi_square_cnn.py)
 - read the robot-mounted RGB camera each control tick
 
+The square driver now defaults to `--control_mode kinematic`. That is intentional: the current recommended square dataset path uses [`scripts/record_turbopi_square_simple.py`](../scripts/record_turbopi_square_simple.py), which records a kinematic teacher trajectory. Keeping inference kinematic by default avoids the train/deploy mismatch that shows up when a model trained on the simple recorder is pushed straight into wheel-dynamics control.
+
 The frame processing itself still follows the same pattern as the legacy `loop_cnn/drive.py`:
 
 1. the robot client returns an RGB frame
@@ -253,6 +255,13 @@ That smoothing is an EMA on the normalized action.
 
 So model output stays normalized, while deployment chooses the real command scale later.
 
+On the square inference script, the usual practical command is now something like:
+
+```bash
+cd /workspace
+./isaaclab/isaaclab.sh -p /workspace/turbopi_standalone/scripts/drive_turbopi_square_cnn.py --livestream 2 --view chase --direction counterclockwise --control_mode kinematic --checkpoint /workspace/turbopi_standalone/runs/cnn_square_simple/<run_name>/checkpoints/best.pt
+```
+
 ### Deadzone handling
 
 `apply_minimum_command_floor()` lifts small nonzero commands above motor deadzones:
@@ -272,6 +281,7 @@ From the code path you shared, common deployment failure modes are:
 - too-large command caps causing oscillation
 - minimum command floors that are too high, which can make the robot jerky
 - domain mismatch between training track appearance and live deployment
+- deploying a checkpoint trained on the simple square recorder in `--control_mode dynamic`, which reintroduces a motion-model mismatch
 
 ## E. Deadlock / Freeze Issue in Isaac Lab Teleop
 
