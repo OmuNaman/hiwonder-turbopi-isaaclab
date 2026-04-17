@@ -20,7 +20,7 @@ parser.add_argument("--vy_test", type=float, default=0.15, help="Strafe test com
 parser.add_argument("--wz_test", type=float, default=0.80, help="Yaw test command in rad/s.")
 parser.add_argument("--output", type=str, default="", help="Optional JSON file to write the summary to.")
 parser.add_argument("--omega_feedback", action="store_true", help="Enable closed-loop omega compensation during the test.")
-parser.add_argument("--omega_feedback_gain", type=float, default=2.0, help="Yaw-rate feedback gain when omega compensation is enabled.")
+parser.add_argument("--omega_feedback_gain", type=float, default=0.6, help="Yaw-rate feedback gain when omega compensation is enabled (additive on top of desired wz).")
 parser.add_argument("--omega_measure_alpha", type=float, default=0.2, help="EMA factor for measured omega when compensation is enabled.")
 parser.add_argument("--no_rollers", action="store_true", help="Skip procedural mecanum roller generation.")
 AppLauncher.add_app_launcher_args(parser)

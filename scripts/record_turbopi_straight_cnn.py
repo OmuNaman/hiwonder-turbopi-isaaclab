@@ -86,7 +86,7 @@ parser.add_argument("--max_vy", type=float, default=0.35, help="Maximum lateral 
 parser.add_argument("--max_wz", type=float, default=2.00, help="Maximum yaw command in rad/s.")
 parser.add_argument("--enable_omega_feedback", dest="enable_omega_feedback", action="store_true", default=True, help="Enable closed-loop yaw-rate compensation during autonomous recording (default: on).")
 parser.add_argument("--disable_omega_feedback", dest="enable_omega_feedback", action="store_false", help="Disable closed-loop yaw-rate compensation during autonomous recording.")
-parser.add_argument("--omega_feedback_gain", type=float, default=2.0, help="Closed-loop yaw-rate feedback gain.")
+parser.add_argument("--omega_feedback_gain", type=float, default=0.6, help="Closed-loop yaw-rate feedback gain (additive on top of the desired wz).")
 parser.add_argument("--omega_measure_alpha", type=float, default=0.2, help="EMA factor for measured yaw rate in the compensator.")
 parser.add_argument("--no_rollers", action="store_true", help="Skip procedural mecanum roller generation.")
 AppLauncher.add_app_launcher_args(parser)

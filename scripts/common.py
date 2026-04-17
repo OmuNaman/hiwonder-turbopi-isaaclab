@@ -48,9 +48,15 @@ VIEW_MODES: tuple[ViewMode, ...] = ("overview", "chase", "robot")
 
 @dataclass(frozen=True)
 class OmegaTrackerCfg:
-    """Closed-loop correction for commanded yaw rate."""
+    """Closed-loop correction for commanded yaw rate.
 
-    feedback_gain: float = 2.0
+    The compensator adds a proportional (optionally + integral) correction on
+    top of the desired yaw command. With the corrected roller geometry the
+    open-loop plant gain is roughly 1.0, so a small feedback gain is enough
+    to soak up residual drift at corners without ringing on straights.
+    """
+
+    feedback_gain: float = 0.6
     measurement_alpha: float = 0.2
     integrator_gain: float = 0.0
     integrator_limit: float = 0.5
@@ -96,7 +102,17 @@ class OmegaTracker:
             self.integral.zero_()
 
         corrected = command_t.clone()
-        corrected[:, 2] = self.cfg.feedback_gain * error + self.cfg.integrator_gain * self.integral
+        # Additive feedforward + feedback. The earlier version replaced the
+        # command with just `K * error`, which only looked stable because the
+        # pre-fix plant had roughly 2x gain and accidentally re-amplified the
+        # signal. With the corrected plant (~1x gain) the replacement form
+        # ringed on every corner, so feed the desired wz through as a
+        # feedforward and only trim it with the feedback error.
+        corrected[:, 2] = (
+            command_t[:, 2]
+            + self.cfg.feedback_gain * error
+            + self.cfg.integrator_gain * self.integral
+        )
         max_abs = float(self.cfg.command_limit if command_limit is None else command_limit)
         corrected[:, 2].clamp_(-max_abs, max_abs)
         return corrected

@@ -31,7 +31,7 @@ parser.add_argument(
     help="First-order smoothing factor in [0, 1]. Higher values track the keyboard more tightly.",
 )
 parser.add_argument("--disable_omega_feedback", action="store_true", help="Send yaw commands directly without closed-loop compensation.")
-parser.add_argument("--omega_feedback_gain", type=float, default=2.0, help="Closed-loop yaw-rate feedback gain.")
+parser.add_argument("--omega_feedback_gain", type=float, default=0.6, help="Closed-loop yaw-rate feedback gain (additive on top of the desired wz).")
 parser.add_argument("--omega_measure_alpha", type=float, default=0.2, help="EMA factor for measured yaw rate in the compensator.")
 parser.add_argument("--no_rollers", action="store_true", help="Skip procedural mecanum roller generation.")
 AppLauncher.add_app_launcher_args(parser)
