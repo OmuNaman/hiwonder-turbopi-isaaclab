@@ -138,6 +138,7 @@ from square_loop import (
     design_square_loop_scene,
     direction_sign,
     phase_to_segment_and_progress,
+    segment_tangent_clockwise,
     square_phase_to_point_and_tangent,
     start_pose_for_direction,
 )
@@ -561,17 +562,33 @@ def compute_full_square_command(robot, scene_cfg: SquareTrackSceneCfg, direction
     pos_xy = robot.data.root_pos_w[:, :2]
     quat_w = robot.data.root_quat_w
     nearest_xy, _nearest_tangent, track_error, phase = compute_square_track_frame(pos_xy, scene_cfg.square_half_extent)
-    lookahead_phase = phase + sign * (args_cli.lookahead_distance / max(8.0 * scene_cfg.square_half_extent, 1e-6))
-    target_point_xy, target_tangent_xy = square_phase_to_point_and_tangent(lookahead_phase, scene_cfg.square_half_extent)
-    target_tangent_xy = target_tangent_xy * sign
 
     segment, segment_progress = phase_to_segment_and_progress(phase)
+    current_tangent_xy = segment_tangent_clockwise(segment) * sign
+    direction_step = 1 if sign > 0.0 else -1
+    next_segment = torch.remainder(segment + direction_step, 4)
+    next_tangent_xy = segment_tangent_clockwise(next_segment) * sign
     segment_length = 2.0 * scene_cfg.square_half_extent
     distance_to_corner = (
         (1.0 - segment_progress) * segment_length
         if sign > 0.0
         else segment_progress * segment_length
     )
+    blend_distance = max(args_cli.lookahead_distance, args_cli.corner_slowdown_distance)
+    corner_blend = torch.clamp(1.0 - distance_to_corner / max(blend_distance, 1e-4), min=0.0, max=1.0)
+    blended_tangent_xy = (
+        (1.0 - corner_blend).unsqueeze(-1) * current_tangent_xy
+        + corner_blend.unsqueeze(-1) * next_tangent_xy
+    )
+    blended_norm = torch.linalg.norm(blended_tangent_xy, dim=-1, keepdim=True)
+    target_tangent_xy = torch.where(
+        blended_norm > 1e-6,
+        blended_tangent_xy / blended_norm,
+        current_tangent_xy,
+    )
+
+    lookahead_phase = phase + sign * (args_cli.lookahead_distance / max(8.0 * scene_cfg.square_half_extent, 1e-6))
+    target_point_xy, _ = square_phase_to_point_and_tangent(lookahead_phase, scene_cfg.square_half_extent)
 
     target_point_w = torch.zeros((1, 3), dtype=torch.float32, device=robot.device)
     target_point_w[:, :2] = target_point_xy
