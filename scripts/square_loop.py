@@ -58,13 +58,21 @@ class ControlLimits:
 
 @dataclass(frozen=True)
 class TeacherControllerCfg:
-    """Parameters for the deterministic square-loop teacher."""
+    """Parameters for the deterministic square-loop teacher.
+
+    Heading gains were halved after the mecanum roller + wheel damping fix
+    made the plant's yaw gain drop from ~2x to ~1x. With the old gains and
+    a clean plant the outer heading loop's poles sat at |z|~0.735 with a
+    large imaginary part, so the teacher's own wz commands rang every 2-3
+    control ticks on the straights. Halving the gains puts the poles on
+    the real axis and kills the ring without changing corner behavior.
+    """
 
     target_speed: float = 0.18
     lookahead_distance: float = 0.05
     boundary_gain: float = 0.8
-    heading_gain: float = 5.4
-    cross_track_heading_gain: float = 2.4
+    heading_gain: float = 2.7
+    cross_track_heading_gain: float = 1.2
     lateral_gain: float = 0.45
     corner_slowdown: float = 0.75
     min_corner_scale: float = 0.40
@@ -77,7 +85,7 @@ class TeacherControllerCfg:
     strafe_suppression_angle: float = 0.35
     min_forward_speed: float = 0.05
     command_filter_alpha_xy: float = 0.24
-    command_filter_alpha_wz: float = 0.48
+    command_filter_alpha_wz: float = 0.30
 
 
 @dataclass(frozen=True)

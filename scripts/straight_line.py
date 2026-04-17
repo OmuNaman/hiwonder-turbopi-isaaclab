@@ -79,9 +79,12 @@ class StraightTeacherCfg:
     # Lateral and heading gains are in body frame. Signs match ROS convention
     # (+vy = left, +wz = CCW). Body-left lateral error contributes +wz so the
     # robot turns its nose back toward the line; once near the line the small
-    # lateral command nudges it the rest of the way.
-    heading_gain: float = 4.5
-    cross_track_heading_gain: float = 2.0
+    # lateral command nudges it the rest of the way. Gains picked so the
+    # discrete heading loop (control rate 10 Hz, plant gain ~1x) has its
+    # poles on the positive real axis, avoiding the underdamped ring that
+    # the square teacher exhibited with heading_gain=5.4.
+    heading_gain: float = 2.2
+    cross_track_heading_gain: float = 0.8
     lateral_gain: float = 0.35
     max_lateral_speed: float = 0.045
     strafe_suppression_angle: float = 0.35
@@ -89,7 +92,7 @@ class StraightTeacherCfg:
     track_error_slowdown: float = 0.35
     min_tracking_scale: float = 0.55
     command_filter_alpha_xy: float = 0.30
-    command_filter_alpha_wz: float = 0.55
+    command_filter_alpha_wz: float = 0.30
 
 
 @dataclass(frozen=True)
