@@ -19,44 +19,48 @@ from isaaclab.sim.utils import bind_physics_material
 
 @dataclass
 class MecanumWheelConfig:
-    num_rollers: int = 9
-    roller_radius: float = 0.0035
+    num_rollers: int = 16
+    roller_radius: float = 0.0050
     roller_height: float = 0.014
-    roller_center_dist: float = 0.029
+    roller_center_dist: float = 0.0280
     roller_angle_deg: float = 45.0
-    roller_mass: float = 0.001
+    roller_mass: float = 0.0006
     prefix: str = ""
     wheel_pos_in_robot: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
+# Roller angle signs below match the standard ROS-convention mecanum IK in
+# common.py (+vy = body-left strafe, +wz = CCW yaw). The earlier layout used
+# the mirror-X pattern, which inverted strafe direction and left yaw relying
+# on roller slip for the correct sign.
 WHEEL_CONFIGS = {
     "wheel_lf_link": MecanumWheelConfig(
-        roller_angle_deg=+45.0,
+        roller_angle_deg=-45.0,
         prefix="lf",
         wheel_pos_in_robot=(0.057814, 0.064852, 0.032474),
     ),
     "wheel_rf_link": MecanumWheelConfig(
-        roller_angle_deg=-45.0,
+        roller_angle_deg=+45.0,
         prefix="rf",
         wheel_pos_in_robot=(0.057814, -0.065148, 0.032474),
     ),
     "wheel_lb_link": MecanumWheelConfig(
-        roller_angle_deg=-45.0,
+        roller_angle_deg=+45.0,
         prefix="lb",
         wheel_pos_in_robot=(-0.061513, 0.064852, 0.032474),
     ),
     "wheel_rb_link": MecanumWheelConfig(
-        roller_angle_deg=+45.0,
+        roller_angle_deg=-45.0,
         prefix="rb",
         wheel_pos_in_robot=(-0.061513, -0.065148, 0.032474),
     ),
 }
 
 ROLLER_MATERIAL_CFG = RigidBodyMaterialCfg(
-    static_friction=0.8,
-    dynamic_friction=0.6,
+    static_friction=1.0,
+    dynamic_friction=0.85,
     restitution=0.0,
-    friction_combine_mode="average",
+    friction_combine_mode="multiply",
 )
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -10,7 +11,7 @@ from pxr import Gf, Sdf, UsdGeom
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import Articulation, ArticulationCfg
-from isaaclab.utils.math import quat_apply
+from isaaclab.utils.math import quat_apply, quat_from_euler_xyz
 
 from mecanum_builder import add_all_mecanum_rollers
 
@@ -27,7 +28,7 @@ ROBOT_CAMERA_PATH = f"{ROBOT_PRIM_PATH}/camera_link/RobotCamera"
 CHASE_CAMERA_PATH = "/World/TurboPiChaseCamera"
 PERSPECTIVE_CAMERA_PATH = "/OmniverseKit_Persp"
 
-CAMERA_LINK_TO_SENSOR_POS = (0.015, 0.0, 0.0)
+CAMERA_LINK_TO_SENSOR_POS = (0.040, 0.0, 0.0)
 CAMERA_LINK_TO_SENSOR_ROT = (0.965926, 0.0, -0.258819, 0.0)
 
 WHEEL_RADIUS = 0.033
@@ -45,6 +46,62 @@ WHEEL_FORWARD_SIGN = {
 VIEW_MODES: tuple[ViewMode, ...] = ("overview", "chase", "robot")
 
 
+@dataclass(frozen=True)
+class OmegaTrackerCfg:
+    """Closed-loop correction for commanded yaw rate."""
+
+    feedback_gain: float = 2.0
+    measurement_alpha: float = 0.2
+    integrator_gain: float = 0.0
+    integrator_limit: float = 0.5
+    command_limit: float = 2.0
+
+
+class OmegaTracker:
+    """Simple filtered-feedback compensator for body yaw-rate tracking."""
+
+    def __init__(self, num_envs: int, device: str | torch.device, cfg: OmegaTrackerCfg | None = None):
+        self.cfg = cfg or OmegaTrackerCfg()
+        self.filtered_wz = torch.zeros(num_envs, dtype=torch.float32, device=device)
+        self.integral = torch.zeros(num_envs, dtype=torch.float32, device=device)
+
+    def reset(self, env_ids: torch.Tensor | list[int] | None = None) -> None:
+        if env_ids is None:
+            self.filtered_wz.zero_()
+            self.integral.zero_()
+            return
+        env_ids_t = torch.as_tensor(env_ids, dtype=torch.long, device=self.filtered_wz.device)
+        self.filtered_wz[env_ids_t] = 0.0
+        self.integral[env_ids_t] = 0.0
+
+    def compensate(
+        self,
+        desired_command: torch.Tensor | list[float] | tuple[float, float, float],
+        measured_wz: torch.Tensor,
+        *,
+        dt: float,
+        command_limit: float | None = None,
+    ) -> torch.Tensor:
+        command_t = torch.as_tensor(desired_command, dtype=torch.float32, device=self.filtered_wz.device)
+        if command_t.ndim == 1:
+            command_t = command_t.unsqueeze(0)
+        measured_wz_t = torch.as_tensor(measured_wz, dtype=torch.float32, device=self.filtered_wz.device).view(-1)
+        alpha = float(max(0.0, min(1.0, self.cfg.measurement_alpha)))
+        self.filtered_wz.mul_(1.0 - alpha).add_(alpha * measured_wz_t)
+        error = command_t[:, 2] - self.filtered_wz
+        if self.cfg.integrator_gain > 0.0 and dt > 0.0:
+            self.integral.add_(error * float(dt))
+            self.integral.clamp_(-self.cfg.integrator_limit, self.cfg.integrator_limit)
+        else:
+            self.integral.zero_()
+
+        corrected = command_t.clone()
+        corrected[:, 2] = self.cfg.feedback_gain * error + self.cfg.integrator_gain * self.integral
+        max_abs = float(self.cfg.command_limit if command_limit is None else command_limit)
+        corrected[:, 2].clamp_(-max_abs, max_abs)
+        return corrected
+
+
 def resolve_asset_usd(asset_usd: str | None = None) -> Path:
     """Return the USD path to load for the standalone TurboPi bundle."""
     usd_path = Path(asset_usd).expanduser().resolve() if asset_usd else TURBOPI_USD
@@ -56,46 +113,54 @@ def resolve_asset_usd(asset_usd: str | None = None) -> Path:
     return usd_path
 
 
-def build_turbopi_cfg(asset_usd: str | None = None, prim_path: str = ROBOT_PRIM_PATH) -> ArticulationCfg:
+def build_turbopi_cfg(
+    asset_usd: str | None = None,
+    prim_path: str = ROBOT_PRIM_PATH,
+    *,
+    add_rollers: bool = True,
+) -> ArticulationCfg:
     """Create the articulation config used by the standalone viewer and teleop scripts."""
+    actuators = {
+        "wheels": ImplicitActuatorCfg(
+            joint_names_expr=["wheel_.*_joint"],
+            velocity_limit_sim=35.0,
+            effort_limit_sim=0.22,
+            stiffness=0.0,
+            damping=20.0,
+        ),
+        "arm": ImplicitActuatorCfg(
+            joint_names_expr=["joint[23]"],
+            velocity_limit_sim=3.0,
+            effort_limit_sim=2.0,
+            stiffness=10.0,
+            damping=1.0,
+        ),
+    }
+    if add_rollers:
+        actuators["rollers"] = ImplicitActuatorCfg(
+            joint_names_expr=[".*_roller_.*_joint"],
+            velocity_limit_sim=100.0,
+            effort_limit_sim=0.0,
+            stiffness=0.0,
+            damping=0.0,
+        )
+
     return ArticulationCfg(
         prim_path=prim_path,
         spawn=sim_utils.UsdFileCfg(
             usd_path=str(resolve_asset_usd(asset_usd)),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 disable_gravity=False,
-                max_depenetration_velocity=5.0,
+                max_depenetration_velocity=2.0,
             ),
             articulation_props=sim_utils.ArticulationRootPropertiesCfg(
                 enabled_self_collisions=False,
-                solver_position_iteration_count=16,
-                solver_velocity_iteration_count=4,
+                solver_position_iteration_count=24,
+                solver_velocity_iteration_count=8,
             ),
         ),
         init_state=ArticulationCfg.InitialStateCfg(pos=(0.0, 0.0, 0.04)),
-        actuators={
-            "wheels": ImplicitActuatorCfg(
-                joint_names_expr=["wheel_.*_joint"],
-                velocity_limit_sim=35.0,
-                effort_limit_sim=0.22,
-                stiffness=0.0,
-                damping=5.0,
-            ),
-            "arm": ImplicitActuatorCfg(
-                joint_names_expr=["joint[23]"],
-                velocity_limit_sim=3.0,
-                effort_limit_sim=2.0,
-                stiffness=10.0,
-                damping=1.0,
-            ),
-            "rollers": ImplicitActuatorCfg(
-                joint_names_expr=[".*_roller_.*_joint"],
-                velocity_limit_sim=100.0,
-                effort_limit_sim=0.0,
-                stiffness=0.0,
-                damping=0.0,
-            ),
-        },
+        actuators=actuators,
     )
 
 
@@ -121,6 +186,7 @@ def _set_camera_common_attrs(camera: UsdGeom.Camera) -> None:
     camera.CreateFocusDistanceAttr(400.0)
     camera.CreateHorizontalApertureAttr(10.0)
     camera.CreateVerticalApertureAttr(7.5)
+    camera.CreateClippingRangeAttr().Set(Gf.Vec2f(0.01, 100.0))
     camera_prim = camera.GetPrim()
     coi_attr = camera_prim.GetProperty("omni:kit:centerOfInterest")
     if not coi_attr or not coi_attr.IsValid():
@@ -153,7 +219,7 @@ def ensure_chase_camera(camera_path: str = CHASE_CAMERA_PATH) -> str:
 
 def spawn_turbopi(asset_usd: str | None = None, add_rollers: bool = True) -> Articulation:
     """Spawn the standalone TurboPi articulation and attach its helper cameras."""
-    robot = Articulation(build_turbopi_cfg(asset_usd=asset_usd))
+    robot = Articulation(build_turbopi_cfg(asset_usd=asset_usd, add_rollers=add_rollers))
     stage = get_current_stage()
     if add_rollers:
         add_all_mecanum_rollers(ROBOT_PRIM_PATH, stage)
@@ -293,8 +359,29 @@ def twist_to_wheel_targets(command: torch.Tensor | list[float] | tuple[float, fl
 
 def reset_robot(robot: Articulation, position: tuple[float, float, float] = (0.0, 0.0, 0.04)) -> None:
     """Reset the robot root and joints to a clean startup pose."""
+    reset_robot_pose(robot, position=position)
+
+
+def reset_robot_pose(
+    robot: Articulation,
+    position: tuple[float, float, float] = (0.0, 0.0, 0.04),
+    *,
+    yaw: float | None = None,
+    quat_wxyz: tuple[float, float, float, float] | None = None,
+) -> None:
+    """Reset the robot root and joints to a clean startup pose with an optional yaw."""
+    if yaw is not None and quat_wxyz is not None:
+        raise ValueError("Specify either yaw or quat_wxyz, not both.")
+
     default_root_state = robot.data.default_root_state.clone()
     default_root_state[:, 0:3] = torch.tensor(position, dtype=torch.float32, device=robot.device)
+    if quat_wxyz is not None:
+        root_quat = torch.tensor(quat_wxyz, dtype=torch.float32, device=robot.device).view(1, 4)
+        default_root_state[:, 3:7] = root_quat.repeat(robot.num_instances, 1)
+    elif yaw is not None:
+        yaw_t = torch.full((robot.num_instances,), float(yaw), dtype=torch.float32, device=robot.device)
+        zeros = torch.zeros_like(yaw_t)
+        default_root_state[:, 3:7] = quat_from_euler_xyz(zeros, zeros, yaw_t)
     default_root_state[:, 7:] = 0.0
 
     robot.write_root_pose_to_sim(default_root_state[:, :7])

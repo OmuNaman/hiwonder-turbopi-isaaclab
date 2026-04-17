@@ -30,6 +30,9 @@ parser.add_argument(
     default=0.25,
     help="First-order smoothing factor in [0, 1]. Higher values track the keyboard more tightly.",
 )
+parser.add_argument("--disable_omega_feedback", action="store_true", help="Send yaw commands directly without closed-loop compensation.")
+parser.add_argument("--omega_feedback_gain", type=float, default=2.0, help="Closed-loop yaw-rate feedback gain.")
+parser.add_argument("--omega_measure_alpha", type=float, default=0.2, help="EMA factor for measured yaw rate in the compensator.")
 parser.add_argument("--no_rollers", action="store_true", help="Skip procedural mecanum roller generation.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -43,6 +46,8 @@ import isaaclab.sim as sim_utils
 from isaaclab.devices import Se2Keyboard, Se2KeyboardCfg
 
 from common import (
+    OmegaTracker,
+    OmegaTrackerCfg,
     activate_view_mode,
     cycle_view_mode,
     design_basic_scene,
@@ -72,6 +77,17 @@ def main() -> None:
     wheel_joint_ids = get_wheel_joint_ids(robot)
     arm_joint_ids = get_arm_joint_ids(robot)
     filtered_command = torch.zeros((robot.num_instances, 3), dtype=torch.float32, device=robot.device)
+    omega_tracker = None
+    if not args_cli.disable_omega_feedback:
+        omega_tracker = OmegaTracker(
+            robot.num_instances,
+            robot.device,
+            OmegaTrackerCfg(
+                feedback_gain=args_cli.omega_feedback_gain,
+                measurement_alpha=args_cli.omega_measure_alpha,
+                command_limit=max(args_cli.wz, 2.0),
+            ),
+        )
 
     viewport = get_viewport()
     state = {"view_mode": activate_view_mode(args_cli.view, sim, robot, viewport)}
@@ -93,6 +109,8 @@ def main() -> None:
     def reset_cb() -> None:
         reset_robot(robot)
         filtered_command.zero_()
+        if omega_tracker is not None:
+            omega_tracker.reset()
         print("[INFO] Robot reset.")
 
     def cycle_camera_cb() -> None:
@@ -110,6 +128,11 @@ def main() -> None:
     print(f"[INFO] TurboPi USD : {resolve_asset_usd(args_cli.asset_usd)}")
     print("[INFO] Controls    : Up/Down drive, Left/Right strafe, Z/X yaw, L zeroes command, R reset, C camera.")
     print(f"[INFO] Initial view: {state['view_mode']}")
+    if omega_tracker is not None:
+        print(
+            f"[INFO] Omega ctrl  : enabled (gain={args_cli.omega_feedback_gain:.2f}, "
+            f"alpha={args_cli.omega_measure_alpha:.2f})"
+        )
     print("[INFO] Livestream  : click once inside the Isaac viewport before using the keyboard in a remote session.")
     if viewport is None and args_cli.view != "overview":
         print("[INFO] No interactive viewport is available in this launch mode, so the script fell back to overview.")
@@ -127,9 +150,17 @@ def main() -> None:
 
         raw_command = teleop.advance().view(robot.num_instances, 3)
         filtered_command.mul_(1.0 - alpha).add_(alpha * raw_command)
+        applied_command = filtered_command
+        if omega_tracker is not None:
+            applied_command = omega_tracker.compensate(
+                filtered_command,
+                robot.data.root_ang_vel_b[:, 2],
+                dt=float(sim_dt),
+                command_limit=args_cli.wz,
+            )
 
         robot.set_joint_velocity_target(
-            twist_to_wheel_targets(filtered_command, robot.device),
+            twist_to_wheel_targets(applied_command, robot.device),
             joint_ids=wheel_joint_ids,
         )
         hold_arm_posture(robot, arm_joint_ids)
